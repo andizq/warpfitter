@@ -4,6 +4,7 @@ import matplotlib.gridspec as gridspec
 from mpl_setup import *
 import pickle
 import os
+import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
 import utils as mu
@@ -305,6 +306,24 @@ def grid_up(fname_full, phi_highres = np.linspace(-np.pi, np.pi, 257), **kwargs)
 
 
 
+
+def save_gp_samples_to_csv(samples, r_eval, discname, quantity_name, output_dir='gp_samples'):
+    """
+    Save GP posterior samples to a CSV file.
+    
+    Parameters:
+    - samples: ndarray of shape (n_radii, n_samples)
+    - r_eval: radius grid of shape (n_radii,)
+    - discname: name of the disc
+    - quantity_name: string like 'delta_i', 'delta_pa', 'theta', 'psi', 'gamma'
+    - output_dir: directory where CSVs are saved
+    """
+    clean_discname = re.sub(r'\W+', '_', discname.strip())
+    os.makedirs(output_dir, exist_ok=True)
+    df = pd.DataFrame(samples.T, columns=[f"{r:.3f}" for r in r_eval])
+    filename = f"{output_dir}/{clean_discname}_{quantity_name}_gp_samples.csv"
+    df.to_csv(filename, index=False)
+
 def fit_gp_from_warp_model(
     rgrid,
     phigrid,
@@ -520,6 +539,13 @@ def fit_gp_from_warp_model(
 
 	# Store gamma samples for optional use
 	gamma_samples = np.arctan2(i_samples, -pa_samples * np.sin(incl))
+
+	save_gp_samples_to_csv(i_samples, r_eval, discname, "delta_i")
+	save_gp_samples_to_csv(pa_samples, r_eval, discname, "delta_pa")
+	save_gp_samples_to_csv(theta_samples, r_eval, discname, "beta")
+	save_gp_samples_to_csv(psi_samples, r_eval, discname, "psi")
+	save_gp_samples_to_csv(gamma_samples, r_eval, discname, "gamma")
+
 
 
 	return {
@@ -939,6 +965,17 @@ def plot_combined_velocity_and_profiles(
 	else:		
 		ax3.set_xlabel("Radius [AU]")
 
+
+	# Compute max beta for each posterior sample
+	theta_max_per_sample = np.max(np.rad2deg(theta_samples), axis=0)  # shape (n_samples,)
+
+	# Compute the median and ±1σ confidence intervals
+	theta_max_median = np.median(theta_max_per_sample)
+	theta_max_lower = np.percentile(theta_max_per_sample, 16)
+	theta_max_upper = np.percentile(theta_max_per_sample, 84)
+
+	# Print result
+	print(f"Max β (median ±1σ): {theta_max_median:.2f}° (+{theta_max_upper - theta_max_median:.2f}, -{theta_max_median - theta_max_lower:.2f})")
 
 	fig.suptitle(f"{discname} {molecule}", fontsize=16)
 
@@ -2537,7 +2574,6 @@ if __name__=='__main__':
 				incl=incl,
 				trunc_rout=rout,
 				plot=args.plot,
-				fit=args.fit,
 				channel_spacing=channel_spacing,
 				Nbeam=args.Nbeam,
 				folder=folder,
@@ -2722,8 +2758,3 @@ if __name__=='__main__':
 	compare_warp_to_curone(results_warp, disc_name_map, xaxis_log_psi=False)
 
 	plot_inclination_vs_pa(results_warp)
-
-	if args.compare:
-		compare_dominant_modes_across_targets(results, topN=args.topN)
-
-
