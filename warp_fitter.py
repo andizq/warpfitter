@@ -2314,6 +2314,7 @@ if __name__=='__main__':
 	#exit()
 	parser = argparse.ArgumentParser()
 	parser.add_argument('--plot', action='store_true')
+	parser.add_argument('--curone', action='store_true')        
 	parser.add_argument('--reset', action='store_true')
 	parser.add_argument('--Nbeam', type=int, default=1, help='Number of beams to sample')
 	#parser.add_argument('--target', choices=['default', 'mwc758', 'v4046', 'both', 'testgrid', 'testaxi'], default='both')
@@ -2627,7 +2628,7 @@ if __name__=='__main__':
 
 	#plot_warp_vs_alphaS(results_warp, disc_name_map, inc_dbell=True)
 
-	if args.wcomp:
+	if args.wcomp and args.plot:
 		plot_warp_comparison(results_warp)
 		
 	results_warp_12co = {}
@@ -2675,8 +2676,8 @@ if __name__=='__main__':
 						results_warp_12co[label]['incl'] = incl
 		
 		
-		plot_warp_amplitude_comparison(results_warp_12co, results_warp_13co)
-		plot_inclination_vs_pa_compare(results_warp_12co, results_warp_13co)
+		if args.plot: plot_warp_amplitude_comparison(results_warp_12co, results_warp_13co)
+		if args.plot: plot_inclination_vs_pa_compare(results_warp_12co, results_warp_13co)
 	
 	if args.beamcomp:
 		results_015 = {}
@@ -2748,13 +2749,13 @@ if __name__=='__main__':
 					print(f"[b015] Skipping {label_015} — file not found.")
 
 
-		plot_beam_amplitude_comparison(results_015, results_030)
+		if args.plot: plot_beam_amplitude_comparison(results_015, results_030)
 
 	#plot_warp_vs_mdot_norm(results_warp, disc_name_map)
 
 	# After warp analysis:
-	
-	compare_warp_to_curone(results_warp, disc_name_map, xaxis_log_psi=True)
-	compare_warp_to_curone(results_warp, disc_name_map, xaxis_log_psi=False)
+	if args.curone:
+	    compare_warp_to_curone(results_warp, disc_name_map, xaxis_log_psi=True)
+	    compare_warp_to_curone(results_warp, disc_name_map, xaxis_log_psi=False)
 
-	plot_inclination_vs_pa(results_warp)
+	if args.plot: plot_inclination_vs_pa(results_warp)
