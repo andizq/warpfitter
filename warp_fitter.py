@@ -4,8 +4,10 @@ import matplotlib.gridspec as gridspec
 from mpl_setup import *
 import pickle
 import os
+import json
 import pandas as pd
 import warnings
+import subprocess
 
 warnings.filterwarnings("ignore")
 import utils as mu
@@ -17,7 +19,7 @@ from scipy.stats import spearmanr, kendalltau
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import Matern, ConstantKernel as C
-
+from astropy.io import fits
 
 # Base map: only one entry per clean display name
 base_disc_name_map = {
@@ -3051,6 +3053,28 @@ def plot_warp_vs_alphaS(results_dict, disc_name_map, inc_dbell=True):
     plt.show()
 
 
+def _register_target(target, vmax=0.2):
+    base_disc_name_map.update({target: target})
+    vmax_dict_12co.update({target: vmax})
+    vmax_dict_13co.update({target: 0.5 * vmax})
+    comparison_data.update(
+        {
+            target: {  # Just a placeholder, copied from AA Tau
+                "log_Mdot": -8.1,
+                "NAI": 0.120,
+                "NIR_excess": 4.7,
+                "NIR_excess_err": 3.6,
+                "NIR_ulim": False,
+                "alpha_S": 6.54,
+                "alpha_S_err_low": 3.62,
+                "alpha_S_err_high": 8.11,
+            }
+        }
+    )
+
+    print(base_disc_name_map)
+
+
 if __name__ == "__main__":
 
     import argparse
@@ -3074,6 +3098,12 @@ if __name__ == "__main__":
     # exit()
     parser = argparse.ArgumentParser()
     parser.add_argument("--plot", action="store_true")
+    parser.add_argument(
+        "--parfile", action="store_true"
+    )  # If provided, infer target name and parameters from local parfile.json
+    parser.add_argument(
+        "--initdiscminer", action="store_true"
+    )  # If provided, make target folders and initialise discminer files from scratch
     parser.add_argument("--curone", action="store_true")
     parser.add_argument("--reset", action="store_true")
     parser.add_argument(
@@ -3083,7 +3113,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target",
         type=str,
-        default="all",
+        default="mwc758",
         help="Comma-separated list of targets: mwc758,v4046,both,testgrid,testaxi,testheight,default",
     )
     parser.add_argument(
@@ -3122,12 +3152,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if not os.path.isdir("velocity_residuals"):
-        print("Error: 'velocity_residuals' directory not found.")
-        exit()
-    os.chdir("velocity_residuals")
-
     target_list = [t.strip().lower() for t in args.target.split(",")]
+
     co13_suffix = "_13co" if args.co13 else ""
 
     def suffix_name(name, co13=args.co13):
@@ -3196,27 +3222,101 @@ if __name__ == "__main__":
 
     targets = []
 
-    if "mwc758" in target_list:
-        label = suffix_name("mwc758", co13=args.co13)
-        bsize = 0.15
-        if label.split("_")[-1] == "b0p30":
-            bsize = 0.30
+    if args.parfile:
+
+        with open("parfile.json") as json_file:
+            pars = json.load(json_file)
+
+        best = pars["best_fit"]
+        meta = pars["metadata"]
+        discname = meta["disc"]
+        dpcpar = meta["dpc"]
+        inclpar = best["orientation"]["incl"]
+        mstarpar = best["velocity"]["Mstar"]
+        velsignpar = best["velocity"]["vel_sign"]
+        outerbound = 0.95 * best["intensity"]["Rout"]
+        header = fits.getheader(meta["file_data"])
+        bsize = 0.2 * header["BMAJ"] * 3600  # For radial binning
+        chansp = np.abs(header["CDELT3"])  # Assumed in km/s
+
+        if args.initdiscminer:
+            subprocess.run(
+                f"rm -rf velocity_residuals/azimuthal_velocity_residuals_{discname}",
+                shell=True,
+                check=True,
+            )
+            subprocess.run(
+                f"mkdir -p velocity_residuals/azimuthal_velocity_residuals_{discname}",
+                shell=True,
+                check=True,
+            )
+
+            subprocess.run("discminer channels -mb 1 -so 0", shell=True, check=True)
+            subprocess.run("discminer moments1d", shell=True, check=True)
+            subprocess.run(
+                "discminer azimprof -i 0.2 -o 0.95 -ig 1 -t residuals -w 1 -so 0",
+                shell=True,
+                check=True,
+            )
+
+            subprocess.run(
+                f"mv azimuthal_velocity_residuals_{discname}.txt velocity_residuals/azimuthal_velocity_residuals_{discname}/",
+                shell=True,
+                check=True,
+            )
+
+        label = suffix_name(discname, co13=args.co13)
         targets.append(
             (
                 label,
                 f"azimuthal_velocity_residuals_{label}.txt",
-                155.9,
+                dpcpar,
                 bsize,
-                1.40,
-                270.0,
-                0.02,
-                0.337866,
-                1.0,
+                mstarpar,
+                outerbound,  # Outer analysis boundary
+                chansp,  # Channel spacing
+                inclpar,
+                velsignpar,
+                clip_13co(meta["disc"]),
+            )
+        )
+
+        _register_target(discname, vmax=pars["custom"]["vlim"])
+        target_list = [discname]
+
+    if not os.path.isdir("velocity_residuals"):
+        print("Error: 'velocity_residuals' directory not found.")
+        exit()
+
+    os.chdir("velocity_residuals")
+
+    if "mwc758" in target_list and not args.parfile:
+        label = suffix_name("mwc758", co13=args.co13)
+        bsize = 0.15
+        if label.split("_")[-1] == "b0p30":
+            bsize = 0.30
+
+        dpcpar = 155.9
+        inclpar = 0.337866
+        mstarpar = 1.40
+        velsignpar = 1.0
+
+        targets.append(
+            (
+                label,
+                f"azimuthal_velocity_residuals_{label}.txt",
+                dpcpar,
+                bsize,
+                mstarpar,
+                270.0,  # Outer analysis boundary
+                0.02,  # Channel spacing
+                inclpar,
+                velsignpar,
                 clip_13co("mwc758"),
             )
         )
 
-    if "mwc758_wc" in target_list:
+    if "mwc758_wc" in target_list and not args.parfile:
         label = suffix_name("mwc758", co13=args.co13)
         label = label + "_wc"
         bsize = 0.15
@@ -3237,7 +3337,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "v4046" in target_list:
+    if "v4046" in target_list and not args.parfile:
         label = suffix_name("v4046", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3257,7 +3357,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "hd34282" in target_list:
+    if "hd34282" in target_list and not args.parfile:
         label = suffix_name("hd34282", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3277,7 +3377,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "hd34700" in target_list:
+    if "hd34700" in target_list and not args.parfile:
         # NOTE THIS IS WRONG!
         label = suffix_name("hd34700", co13=args.co13)
         bsize = 0.15
@@ -3298,7 +3398,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "aatau" in target_list:
+    if "aatau" in target_list and not args.parfile:
         label = suffix_name("aatau", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3318,7 +3418,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "cqtau" in target_list:
+    if "cqtau" in target_list and not args.parfile:
         label = suffix_name("cqtau", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3338,7 +3438,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "dmtau" in target_list:
+    if "dmtau" in target_list and not args.parfile:
         label = suffix_name("dmtau", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3358,7 +3458,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "hd135344" in target_list:
+    if "hd135344" in target_list and not args.parfile:
         label = suffix_name("hd135344", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3378,7 +3478,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "hd143006" in target_list:
+    if "hd143006" in target_list and not args.parfile:
         label = suffix_name("hd143006", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3398,7 +3498,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "j1604" in target_list:
+    if "j1604" in target_list and not args.parfile:
         label = suffix_name("j1604", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3418,7 +3518,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "j1615" in target_list:
+    if "j1615" in target_list and not args.parfile:
         label = suffix_name("j1615", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3438,7 +3538,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "j1842" in target_list:
+    if "j1842" in target_list and not args.parfile:
         label = suffix_name("j1842", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3458,7 +3558,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "j1852" in target_list:
+    if "j1852" in target_list and not args.parfile:
         label = suffix_name("j1852", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3478,7 +3578,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "lkca15" in target_list:
+    if "lkca15" in target_list and not args.parfile:
         label = suffix_name("lkca15", co13=args.co13)
         bsize = 0.15
         print(label, label.split("_")[-1])
@@ -3499,7 +3599,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "pds66" in target_list:
+    if "pds66" in target_list and not args.parfile:
         label = suffix_name("pds66", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3519,7 +3619,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "sycha" in target_list:
+    if "sycha" in target_list and not args.parfile:
         label = suffix_name("sycha", co13=args.co13)
         bsize = 0.15
         if label.split("_")[-1] == "b0p30":
@@ -3539,7 +3639,7 @@ if __name__ == "__main__":
             )
         )
 
-    if "testgrid" in target_list:
+    if "testgrid" in target_list and not args.parfile:
         grid_files = sorted(
             glob.glob(
                 "**/azimuthal_velocity_residuals_incl*deg_PA*deg_xc*_yc*.txt",
@@ -3568,7 +3668,7 @@ if __name__ == "__main__":
                             )
                         )
 
-    if "testheight" in target_list:
+    if "testheight" in target_list and not args.parfile:
         height_dirs = sorted(
             glob.glob("azimuthal_velocity_residuals_z*_p*_q*_Rb*", recursive=True)
         )
@@ -3590,7 +3690,7 @@ if __name__ == "__main__":
                     (label, fname, 100.0, 0.15, 1.0, np.inf, 0.02, 0.52, 1.0, False)
                 )
 
-    if "testaxi" in target_list:
+    if "testaxi" in target_list and not args.parfile:
         axi_files = sorted(glob.glob("**/*_axisym_*.txt", recursive=True))
         for full_path in axi_files:
             fname = os.path.basename(full_path)
